@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>SIP Debugger</title>
+    <style>
+        body { font-family: monospace; padding: 20px; }
+        .row { margin: 10px 0; display: flex; gap: 10px; align-items: center; }
+        input { padding: 5px; width: 300px; }
+        #logs { background: #eee; padding: 10px; height: 300px; overflow: auto; border: 1px solid #ccc; white-space: pre-wrap; }
+    </style>
+</head>
+<body>
+    <h2>SIP Credentials Tester</h2>
+    <div class="row"><label>Server (WSS):</label> <input id="server" value="wss://100140.ringotel.co"></div>
+    <div class="row"><label>Realm (Domain):</label> <input id="realm" value="abirelandtest.ringotel.co"></div>
+    <div class="row"><label>Username:</label> <input id="user" value="9006"></div>
+    <div class="row"><label>Password:</label> <input id="pass" value="39vawKybn1LR"></div>
+    <div class="row"><button id="btnRegister">Test Registration</button> <button id="btnDisconnect">Disconnect</button></div>
+    <div id="logs"></div>
+
+    <script type="module">
+        import * as SIP from 'https://esm.sh/sip.js@0.21.2';
+
+        let userAgent;
+        const logDiv = document.getElementById('logs');
+        
+        function log(msg) { 
+            const line = document.createElement('div');
+            line.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`;
+            logDiv.appendChild(line);
+            logDiv.scrollTop = logDiv.scrollHeight;
+        }
+
+        async function register() {
+            if(userAgent) await userAgent.stop();
+            const server = document.getElementById('server').value;
+            const realm = document.getElementById('realm').value;
+            const username = document.getElementById('user').value;
+            const password = document.getElementById('pass').value;
+
+            const uri = `sip:${username}@${realm}`;
+            
+            const options = {
+                uri: SIP.UserAgent.makeURI(uri),
+                transportOptions: { 
+                    server: server 
+                },
+                authorizationUsername: username,
+                authorizationPassword: password,
+                delegate: {
+                    onConnect: () => log('Connected to WebSocket'),
+                    onDisconnect: (error) => log('Disconnected: ' + (error ? error.message : 'Clean')),
+                }
+            };
+
+            log(`Creating UA for ${uri} connecting to ${server}...`);
+            
+            try {
+                userAgent = new SIP.UserAgent(options);
+                const registerer = new SIP.Registerer(userAgent);
+                
+                // Monitor registration changes
+                registerer.stateChange.addListener((state) => {
+                    log(`Registration State: ${state}`);
+                });
+
+                await userAgent.start();
+                log('UserAgent started. Sending Register...');
+                await registerer.register();
+            } catch (e) {
+                log('Error: ' + e.message);
+                console.error(e);
+            }
+        }
+        
+        async function disconnect() {
+            if(userAgent) {
+                await userAgent.stop();
+                log('Stopped');
+            }
+        }
+
+        document.getElementById('btnRegister').addEventListener('click', register);
+        document.getElementById('btnDisconnect').addEventListener('click', disconnect);
+    </script>
+</body>
+</html>
