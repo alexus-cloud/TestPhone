@@ -21,6 +21,7 @@ export class SipService {
   private isOnHold = false;
   private config: SipConfig;
   private audioElement: HTMLAudioElement;
+  private ringer: HTMLAudioElement;
   private events: SipServiceEvents;
 
   private id: string;
@@ -33,11 +34,21 @@ export class SipService {
     this.config = config;
     this.audioElement = audioElement;
     this.events = events;
-    this.id = this.generateId();
+    this.id = this.generateId(config.username);
+    
+    // Initialize ringer
+    this.ringer = new Audio("/ringtone.mp3");
+    this.ringer.loop = true;
   }
 
-  private generateId(): string {
-    return Math.random().toString(36).substring(2, 10);
+  private generateId(username: string): string {
+    // Generate a stable ID based on username (simple hash)
+    let hash = 0;
+    for (let i = 0; i < username.length; i++) {
+      hash = ((hash << 5) - hash) + username.charCodeAt(i);
+      hash |= 0; // Convert to 32bit integer
+    }
+    return Math.abs(hash).toString(36).substring(0, 8);
   }
 
   private buildOptions(): SimpleUserOptions {
@@ -54,20 +65,77 @@ export class SipService {
       userAgentOptions: {
         authorizationUsername: username,
         authorizationPassword: password,
-        transportOptions: { server },
+        contactName: this.id,
+        contactParams: { transport: "wss" },
+        transportOptions: { 
+          server,
+          keepAliveInterval: 30, // seconds
+          keepAliveDebounce: 10  // seconds
+        },
         userAgentString: `Ringotel (${this.id}) SIP.js/0.21.2`,
+        logLevel: "debug",
+        logBuiltinEnabled: true,
+        sessionDescriptionHandlerFactoryOptions: {
+          iceGatheringTimeout: 2000,
+          peerConnectionConfiguration: {
+            iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
+            bundlePolicy: "balanced",
+            rtcpMuxPolicy: "negotiate",
+          },
+        },
       },
       delegate: {
         onCallReceived: () => {
-          this.log("Incoming call received");
-          this.events.onCallReceived?.({ from: "Unknown" });
+          // Access the session from SimpleUser to get caller info
+          const session = (this.user as any).session;
+          const from = session?.remoteIdentity?.displayName || session?.remoteIdentity?.uri?.user || "Unknown";
+          
+          this.log(`Incoming call received from: ${from}`);
+          
+          // Start ringing
+          this.ringer.play().catch(e => this.log(`Ringer play failed: ${e.message}`));
+          
+          this.events.onCallReceived?.({ from });
         },
         onCallAnswered: () => {
-          this.log("Call answered");
+          this.log("Call answered and media streams established");
+          
+          // Stop ringing
+          this.ringer.pause();
+          this.ringer.currentTime = 0;
+          
+          // Debugging media
+          try {
+            const session = (this.user as any).session;
+            const sdh = session?.sessionDescriptionHandler;
+            const pc = sdh?.peerConnection;
+            if (pc) {
+              this.log(`ICE Connection State: ${pc.iceConnectionState}`);
+              this.log(`Signaling State: ${pc.signalingState}`);
+              const receivers = pc.getReceivers();
+              this.log(`Number of remote tracks: ${receivers.length}`);
+              receivers.forEach((r: any, i: number) => {
+                this.log(`Track ${i}: ${r.track?.kind} - ${r.track?.label} (enabled: ${r.track?.enabled})`);
+              });
+            }
+          } catch (e) {
+            this.log(`Error checking media state: ${(e as Error).message}`);
+          }
+
+          // Explicitly play to satisfy some browser policies
+          this.audioElement.play().catch(e => {
+            this.log(`Audio play failed: ${e.message}. This might be due to browser autoplay policy.`);
+          });
+          
           this.events.onCallAnswered?.();
         },
         onCallHangup: () => {
           this.log("Call hangup");
+          
+          // Stop ringing
+          this.ringer.pause();
+          this.ringer.currentTime = 0;
+          
           this.isOnHold = false;
           this.events.onCallHangup?.();
         },
@@ -105,6 +173,7 @@ export class SipService {
     this.log("Connected");
   }
 
+
   async register(): Promise<void> {
     if (!this.user) {
       await this.connect();
@@ -125,14 +194,42 @@ export class SipService {
     if (!this.user) {
       await this.connect();
     }
-    this.log(`Calling ${destination}...`);
-    await this.user?.call(destination);
+
+    let target = destination;
+    if (!target.startsWith("sip:")) {
+      const { server, realm } = this.config;
+      const resolvedRealm = realm || this.extractRealm(server);
+      target = `sip:${destination}@${resolvedRealm}`;
+    }
+
+    this.log(`Calling ${target}...`);
+
+    await this.user?.call(target, undefined, {
+      sessionDescriptionHandlerOptions: {
+        constraints: { audio: true, video: false }
+      }
+    });
     this.log("Call request sent");
   }
 
   async answer(): Promise<void> {
     this.log("Answering call...");
-    await this.user?.answer();
+    
+    // Ensure audio element is ready
+    try {
+      if (this.audioElement.paused) {
+        this.log("Audio element is paused, preparing for playback...");
+      }
+    } catch (err) {
+      this.log(`Audio element check failed: ${(err as Error).message}`);
+    }
+
+    await this.user?.answer({
+      sessionDescriptionHandlerOptions: {
+        constraints: { audio: true, video: false }
+      }
+    });
+
     this.log("Answer sent");
   }
 

@@ -27,7 +27,6 @@ function App() {
     isOnHold,
     logs,
     micReady,
-    checkMicPermissions,
     connectAndRegister,
     startCall,
     answerCall,
@@ -43,12 +42,19 @@ function App() {
   useEffect(() => {
     if (callState === "active") {
       const timer = window.setInterval(() => setCallSeconds((prev) => prev + 1), 1000);
-      return () => window.clearInterval(timer);
+      return () => {
+        window.clearInterval(timer);
+        // Reset on cleanup when leaving active state
+        setCallSeconds(0);
+      };
     }
-
-    setCallSeconds(0);
     return undefined;
   }, [callState]);
+
+  // Auto-connect on mount
+  useEffect(() => {
+    connectAndRegister();
+  }, [connectAndRegister]);
 
   const handleCall = async () => {
     if (!dialValue.trim()) return;
@@ -76,12 +82,7 @@ function App() {
           <p>Minimal softphone to validate SIP server compatibility.</p>
         </div>
         <div className="actions">
-          <button type="button" onClick={checkMicPermissions} className={micReady ? "ghost" : ""}>
-            {micReady ? "Mic Ready" : "Check Mic"}
-          </button>
-          <button type="button" className="primary" onClick={connectAndRegister}>
-            Connect & Register
-          </button>
+          {/* Auto-connect enabled - no manual buttons needed */}
         </div>
       </header>
 
@@ -132,7 +133,7 @@ function App() {
         </div>
       </main>
 
-      <audio ref={audioRef} autoPlay />
+      <audio ref={audioRef} autoPlay playsInline />
     </div>
   );
 }

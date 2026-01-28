@@ -81,7 +81,8 @@ export const useSIPUser = (audioRef: React.RefObject<HTMLAudioElement | null>) =
 
   const checkMicPermissions = useCallback(async () => {
     try {
-      await navigator.mediaDevices.getUserMedia({ audio: true });
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      stream.getTracks().forEach(track => track.stop());
       setMicReady(true);
       pushLog("Microphone permission granted");
     } catch (error) {
@@ -95,11 +96,25 @@ export const useSIPUser = (audioRef: React.RefObject<HTMLAudioElement | null>) =
       setRegistrationStatus("connecting");
       await serviceRef.current?.connect();
       await serviceRef.current?.register();
+      
+      // Automatically request microphone permissions after registration
+      // This ensures we can answer incoming calls immediately
+      if (!micReady) {
+        pushLog("Requesting microphone permission...");
+        try {
+          await navigator.mediaDevices.getUserMedia({ audio: true });
+          setMicReady(true);
+          pushLog("Microphone ready");
+        } catch (micError) {
+          pushLog(`Microphone access denied: ${(micError as Error).message}`);
+          pushLog("You will be prompted again when answering a call");
+        }
+      }
     } catch (error) {
       setRegistrationStatus("error");
       pushLog(`Registration error: ${(error as Error).message}`);
     }
-  }, [pushLog]);
+  }, [pushLog, micReady]);
 
   const startCall = useCallback(
     async (destination: string) => {
@@ -116,12 +131,30 @@ export const useSIPUser = (audioRef: React.RefObject<HTMLAudioElement | null>) =
 
   const answerCall = useCallback(async () => {
     try {
+      // Ensure we have microphone access before answering
+      if (!micReady) {
+        pushLog("Requesting microphone permission before answering...");
+        try {
+          const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+          stream.getTracks().forEach(track => track.stop());
+          setMicReady(true);
+          pushLog("Microphone permission granted");
+        } catch (micError) {
+          pushLog(`Cannot answer: microphone permission denied - ${(micError as Error).message}`);
+          setCallState("idle");
+          setIncomingCall(null);
+          return;
+        }
+      }
+      
       await serviceRef.current?.answer();
       setCallState("active");
     } catch (error) {
       pushLog(`Answer failed: ${(error as Error).message}`);
+      setCallState("idle");
+      setIncomingCall(null);
     }
-  }, [pushLog]);
+  }, [pushLog, micReady]);
 
   const hangupCall = useCallback(async () => {
     try {
