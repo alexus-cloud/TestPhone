@@ -10,6 +10,18 @@ export const useSIPUser = (audioRef: React.RefObject<HTMLAudioElement | null>) =
   const [isOnHold, setIsOnHold] = useState(false);
   const [logs, setLogs] = useState<string[]>([]);
   const [micReady, setMicReady] = useState(false);
+  const [audioLevel, setAudioLevel] = useState(0);
+  const [localAudioLevel, setLocalAudioLevel] = useState(0);
+  const [stats, setStats] = useState<{ 
+    bytesReceived: number; 
+    bytesSent: number; 
+    packetsReceived: number; 
+    packetsLost: number; 
+    jitter: number;
+    iceCandidatePair?: string;
+    dtlsState?: string;
+    tlsVersion?: string;
+  } | null>(null);
 
   const serviceRef = useRef<SipService | null>(null);
 
@@ -69,6 +81,15 @@ export const useSIPUser = (audioRef: React.RefObject<HTMLAudioElement | null>) =
         setCallState(held ? "held" : "active");
         pushLog(held ? "Call held" : "Call resumed");
       },
+      onAudioLevel: (level) => {
+        setAudioLevel(level);
+      },
+      onLocalAudioLevel: (level) => {
+        setLocalAudioLevel(level);
+      },
+      onStats: (s) => {
+        setStats(s);
+      }
     });
 
     serviceRef.current = service;
@@ -207,5 +228,11 @@ export const useSIPUser = (audioRef: React.RefObject<HTMLAudioElement | null>) =
     holdCall,
     unholdCall,
     toggleMute,
+    audioLevel,
+    localAudioLevel,
+    stats,
+    reattachAudio: () => serviceRef.current?.reattachAudio() ?? Promise.resolve(),
+    listDevices: () => serviceRef.current?.getAudioDevices() ?? Promise.resolve([]),
+    testAudio: () => serviceRef.current?.testAudio() ?? Promise.resolve(),
   };
 };

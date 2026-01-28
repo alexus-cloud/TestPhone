@@ -14,6 +14,18 @@ export interface SipServiceEvents {
   onCallAnswered?: () => void;
   onCallHangup?: () => void;
   onCallHold?: (held: boolean) => void;
+  onAudioLevel?: (level: number) => void;
+  onLocalAudioLevel?: (level: number) => void;
+  onStats?: (stats: { 
+    bytesReceived: number; 
+    bytesSent: number; 
+    packetsReceived: number; 
+    packetsLost: number; 
+    jitter: number;
+    iceCandidatePair?: string;
+    dtlsState?: string;
+    tlsVersion?: string;
+  }) => void;
 }
 
 export class SipService {
@@ -21,6 +33,11 @@ export class SipService {
   private isOnHold = false;
   private config: SipConfig;
   private audioElement: HTMLAudioElement;
+  private audioContext?: AudioContext;
+  private analyser?: AnalyserNode;
+  private localAnalyser?: AnalyserNode;
+  private monitorInterval?: number;
+  private statsInterval?: number;
   private ringer: HTMLAudioElement;
   private events: SipServiceEvents;
 
@@ -78,7 +95,12 @@ export class SipService {
         sessionDescriptionHandlerFactoryOptions: {
           iceGatheringTimeout: 2000,
           peerConnectionConfiguration: {
-            iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
+            iceServers: [
+              { urls: "stun:stun.l.google.com:19302" },
+              { urls: "stun:stun1.l.google.com:19302" },
+              { urls: "stun:stun2.l.google.com:19302" },
+              { urls: "stun:stun.ekiga.net" },
+            ],
             bundlePolicy: "balanced",
             rtcpMuxPolicy: "negotiate",
           },
@@ -108,18 +130,55 @@ export class SipService {
           try {
             const session = (this.user as any).session;
             const sdh = session?.sessionDescriptionHandler;
-            const pc = sdh?.peerConnection;
+            const pc = sdh?.peerConnection as RTCPeerConnection | undefined;
             if (pc) {
-              this.log(`ICE Connection State: ${pc.iceConnectionState}`);
+              this.log(`Initial ICE Connection State: ${pc.iceConnectionState}`);
               this.log(`Signaling State: ${pc.signalingState}`);
+              
+              // Add listener for state changes
+              pc.oniceconnectionstatechange = () => {
+                this.log(`ICE Connection State Changed: ${pc.iceConnectionState}`);
+              };
+
+              pc.onicecandidate = (event) => {
+                if (event.candidate) {
+                  this.log(`New ICE Candidate: ${event.candidate.candidate.split(" ")[7]} (${event.candidate.type})`);
+                } else {
+                  this.log("ICE Candidate gathering complete");
+                }
+              };
+
+              pc.onicecandidateerror = (event: any) => {
+                this.log(`ICE Candidate Error: ${event.errorText} (${event.errorCode}, URL: ${event.url})`);
+              };
+              
               const receivers = pc.getReceivers();
               this.log(`Number of remote tracks: ${receivers.length}`);
-              receivers.forEach((r: any, i: number) => {
+              receivers.forEach((r, i: number) => {
                 this.log(`Track ${i}: ${r.track?.kind} - ${r.track?.label} (enabled: ${r.track?.enabled})`);
               });
+
+              // Check if srcObject is set
+              setTimeout(() => {
+                if (this.audioElement.srcObject) {
+                  this.log("Success: Audio element has srcObject attached");
+                } else {
+                  this.log("Warning: Audio element has NO srcObject attached! Attempting manual attachment...");
+                  const remoteStream = new MediaStream();
+                  receivers.forEach(r => {
+                    if (r.track) remoteStream.addTrack(r.track);
+                  });
+                  this.audioElement.srcObject = remoteStream;
+                  this.log("Manual attachment attempted");
+                }
+                
+                // Start monitoring audio level and WebRTC stats
+                this.monitorAudioLevel();
+                this.startStatsMonitoring();
+              }, 1000);
             }
-          } catch (e) {
-            this.log(`Error checking media state: ${(e as Error).message}`);
+          } catch (err) {
+            this.log(`Error checking media state: ${(err as Error).message}`);
           }
 
           // Explicitly play to satisfy some browser policies
@@ -131,6 +190,9 @@ export class SipService {
         },
         onCallHangup: () => {
           this.log("Call hangup");
+          
+          this.stopAudioMonitoring();
+          this.stopStatsMonitoring();
           
           // Stop ringing
           this.ringer.pause();
@@ -269,6 +331,236 @@ export class SipService {
 
   isHeld(): boolean {
     return this.isOnHold;
+  }
+
+  async getAudioDevices(): Promise<MediaDeviceInfo[]> {
+    try {
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      return devices.filter(d => d.kind === "audioinput" || d.kind === "audiooutput");
+    } catch (e) {
+      this.log(`Error enumerating devices: ${(e as Error).message}`);
+      return [];
+    }
+  }
+
+  async testAudio(): Promise<void> {
+    this.log("Testing audio output element...");
+    const originalSrc = this.audioElement.srcObject;
+    
+    try {
+      // Create a short beep using Web Audio API or just play a frequency
+      if (!this.audioContext) {
+        this.audioContext = new AudioContext();
+      }
+      const osc = this.audioContext.createOscillator();
+      const dest = this.audioContext.createMediaStreamDestination();
+      osc.connect(dest);
+      osc.start();
+      osc.stop(this.audioContext.currentTime + 1);
+      
+      this.audioElement.srcObject = dest.stream;
+      await this.audioElement.play();
+      this.log("Test beep sent to audio element");
+      
+      setTimeout(() => {
+        this.audioElement.srcObject = originalSrc;
+        this.log("Restored original audio source");
+      }, 1500);
+    } catch (e) {
+      this.log(`Test audio failed: ${(e as Error).message}`);
+      this.audioElement.srcObject = originalSrc;
+    }
+  }
+
+  public async reattachAudio(): Promise<void> {
+    this.log("Manually re-attaching audio stream...");
+    try {
+      const pc = ((this.user as any).session?.sessionDescriptionHandler as any)?.peerConnection as RTCPeerConnection | undefined;
+      if (!pc) {
+        this.log("Error: PeerConnection not found for re-attachment");
+        return;
+      }
+
+      const remoteStream = new MediaStream();
+      pc.getReceivers().forEach(receiver => {
+        if (receiver.track) {
+          this.log(`Adding remote track to stream: ${receiver.track.kind} (${receiver.track.label})`);
+          remoteStream.addTrack(receiver.track);
+        }
+      });
+
+      if (remoteStream.getTracks().length > 0) {
+        this.audioElement.srcObject = remoteStream;
+        await this.audioElement.play();
+        this.log("Audio stream re-attached and playing");
+        
+        // Restart monitoring to be sure
+        this.monitorAudioLevel();
+      } else {
+        this.log("Warning: No remote tracks found to re-attach");
+      }
+    } catch (e) {
+      this.log(`Failed to re-attach audio: ${(e as Error).message}`);
+    }
+  }
+
+  private monitorAudioLevel(): void {
+    if (!this.audioElement.srcObject) return;
+    
+    try {
+      if (!this.audioContext) {
+        this.audioContext = new AudioContext();
+      }
+      
+      if (this.audioContext.state === "suspended") {
+        this.audioContext.resume().then(() => this.log("AudioContext resumed"));
+      }
+      
+      const stream = this.audioElement.srcObject as MediaStream;
+      if (stream.getAudioTracks().length === 0) {
+        this.log("No audio tracks to monitor");
+        return;
+      }
+
+      stream.getAudioTracks().forEach((track, i) => {
+        this.log(`Monitoring track ${i}: ${track.label} [state: ${track.readyState}, enabled: ${track.enabled}, muted: ${track.muted}]`);
+      });
+
+      // Detailed WebRTC state logging
+      const pc = ((this.user as any).session?.sessionDescriptionHandler as any)?.peerConnection as RTCPeerConnection | undefined;
+      if (pc) {
+        this.log(`PC State: Signaling=${pc.signalingState}, ICE=${pc.iceConnectionState}, Gathering=${pc.iceGatheringState}`);
+        pc.getSenders().forEach((s, i) => {
+          this.log(`Sender ${i}: ${s.track?.kind} [state=${s.track?.readyState}, enabled=${s.track?.enabled}]`);
+        });
+        pc.getReceivers().forEach((r, i) => {
+          this.log(`Receiver ${i}: ${r.track?.kind} [state=${r.track?.readyState}, enabled=${r.track?.enabled}]`);
+        });
+      }
+
+      this.analyser = this.audioContext.createAnalyser();
+      this.analyser.fftSize = 256;
+      const source = this.audioContext.createMediaStreamSource(stream);
+      source.connect(this.analyser);
+      
+      const bufferLength = this.analyser.frequencyBinCount;
+      const dataArray = new Uint8Array(bufferLength);
+      
+      this.log("Audio monitoring started");
+      
+      // Also monitor local mic if available
+      const session = (this.user as any).session;
+      const localStream = session?.sessionDescriptionHandler?.localMediaStream as MediaStream | undefined;
+      let localBufferLength = 0;
+      let localDataArray: Uint8Array | null = null;
+
+      if (localStream && localStream.getAudioTracks().length > 0) {
+        this.localAnalyser = this.audioContext.createAnalyser();
+        this.localAnalyser.fftSize = 256;
+        const localSource = this.audioContext.createMediaStreamSource(localStream);
+        localSource.connect(this.localAnalyser);
+        localBufferLength = this.localAnalyser.frequencyBinCount;
+        localDataArray = new Uint8Array(localBufferLength);
+      }
+
+      if (this.monitorInterval) window.clearInterval(this.monitorInterval);
+      
+      this.monitorInterval = window.setInterval(() => {
+        // Remote
+        if (this.analyser) {
+          this.analyser.getByteFrequencyData(dataArray);
+          let sum = 0;
+          for (let i = 0; i < bufferLength; i++) sum += dataArray[i];
+          this.events.onAudioLevel?.(sum / bufferLength);
+        }
+        // Local
+        if (this.localAnalyser && localDataArray) {
+          this.localAnalyser.getByteFrequencyData(localDataArray);
+          let localSum = 0;
+          for (let i = 0; i < localBufferLength; i++) localSum += localDataArray[i];
+          this.events.onLocalAudioLevel?.(localSum / localBufferLength);
+        }
+      }, 100);
+    } catch (e) {
+      this.log(`Failed to start audio monitoring: ${(e as Error).message}`);
+    }
+  }
+
+  private stopAudioMonitoring(): void {
+    if (this.monitorInterval) {
+      window.clearInterval(this.monitorInterval);
+      this.monitorInterval = undefined;
+    }
+    this.analyser = undefined;
+    this.localAnalyser = undefined;
+    this.log("Audio monitoring stopped");
+  }
+
+  private startStatsMonitoring(): void {
+    const pc = ((this.user as any).session?.sessionDescriptionHandler as any)?.peerConnection as RTCPeerConnection | undefined;
+    if (!pc) return;
+
+    this.statsInterval = window.setInterval(async () => {
+      try {
+        const stats = await pc.getStats();
+        let bytesReceived = 0;
+        let bytesSent = 0;
+        let packetsReceived = 0;
+        let packetsLost = 0;
+        let jitter = 0;
+        let iceCandidatePair = "";
+        let dtlsState = "";
+        let tlsVersion = "";
+
+        stats.forEach(report => {
+          if (report.type === "inbound-rtp" && report.kind === "audio") {
+            bytesReceived = report.bytesReceived;
+            packetsReceived = report.packetsReceived;
+            packetsLost = report.packetsLost;
+            jitter = report.jitter;
+          }
+          if (report.type === "outbound-rtp" && report.kind === "audio") {
+            bytesSent = report.bytesSent;
+          }
+          if (report.type === "transport") {
+            dtlsState = report.dtlsState;
+          }
+          if (report.type === "certificate") {
+            // Certificate reports sometimes contain protocol information
+            if (report.protocol) {
+              tlsVersion = report.protocol;
+            }
+          }
+          if (report.type === "candidate-pair" && report.state === "succeeded" && report.nominated) {
+            const local = stats.get(report.localCandidateId);
+            const remote = stats.get(report.remoteCandidateId);
+            if (local && remote) {
+              iceCandidatePair = `${local.candidateType} (${local.ip}:${local.port}) -> ${remote.candidateType} (${remote.ip}:${remote.port}) [${report.writable ? "writable" : "not-writable"}]`;
+            }
+          }
+        });
+
+        this.events.onStats?.({ 
+          bytesReceived, 
+          bytesSent, 
+          packetsReceived, 
+          packetsLost, 
+          jitter, 
+          iceCandidatePair, 
+          dtlsState,
+          tlsVersion 
+        });
+      } catch (e) {
+        this.log(`Error getting stats: ${(e as Error).message}`);
+      }
+    }, 2000);
+  }
+
+  private stopStatsMonitoring(): void {
+    if (this.statsInterval) {
+      window.clearInterval(this.statsInterval);
+      this.statsInterval = undefined;
+    }
   }
 
   private extractRealm(server: string): string {
