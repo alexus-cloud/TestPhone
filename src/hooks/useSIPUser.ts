@@ -23,17 +23,31 @@ export const useSIPUser = (audioRef: React.RefObject<HTMLAudioElement | null>) =
     tlsVersion?: string;
   } | null>(null);
 
+  const [customConfig, setCustomConfig] = useState<Partial<SipConfig>>(() => {
+    try {
+      const saved = localStorage.getItem("sip_credentials");
+      return saved ? JSON.parse(saved) : {};
+    } catch {
+      return {};
+    }
+  });
+  
+  const [shouldConnect, setShouldConnect] = useState(false);
   const serviceRef = useRef<SipService | null>(null);
 
   const config: SipConfig = useMemo(
     () => ({
-      server: import.meta.env.VITE_SIP_SERVER,
-      username: import.meta.env.VITE_SIP_USERNAME,
-      password: import.meta.env.VITE_SIP_PASSWORD,
-      realm: import.meta.env.VITE_SIP_REALM,
+      server: customConfig.server || import.meta.env.VITE_SIP_SERVER || "",
+      username: customConfig.username || import.meta.env.VITE_SIP_USERNAME || "",
+      password: customConfig.password || import.meta.env.VITE_SIP_PASSWORD || "",
+      realm: customConfig.realm || import.meta.env.VITE_SIP_REALM || "",
     }),
-    [],
+    [customConfig],
   );
+
+  const hasEnvConfig = useMemo(() => {
+    return !!(import.meta.env.VITE_SIP_SERVER && import.meta.env.VITE_SIP_USERNAME && import.meta.env.VITE_SIP_PASSWORD);
+  }, []);
 
   const pushLog = useCallback((message: string) => {
     setLogs((prev) => [...prev.slice(-199), message]);
@@ -56,6 +70,10 @@ export const useSIPUser = (audioRef: React.RefObject<HTMLAudioElement | null>) =
       onRegistered: () => {
         setRegistrationStatus("registered");
         pushLog("SIP registered");
+        // Save to localStorage on success if not using ENV
+        if (!hasEnvConfig) {
+          localStorage.setItem("sip_credentials", JSON.stringify(config));
+        }
       },
       onUnregistered: () => {
         setRegistrationStatus("disconnected");
@@ -98,7 +116,7 @@ export const useSIPUser = (audioRef: React.RefObject<HTMLAudioElement | null>) =
       service.disconnect().catch(() => undefined);
       serviceRef.current = null;
     };
-  }, [audioRef, config, pushLog]);
+  }, [audioRef, config, pushLog, hasEnvConfig]);
 
   const checkMicPermissions = useCallback(async () => {
     try {
@@ -112,14 +130,31 @@ export const useSIPUser = (audioRef: React.RefObject<HTMLAudioElement | null>) =
     }
   }, [pushLog]);
 
-  const connectAndRegister = useCallback(async () => {
+  const connectAndRegister = useCallback(async (newConfig?: Partial<SipConfig>) => {
     try {
+      if (newConfig) {
+        setCustomConfig(prev => ({ ...prev, ...newConfig }));
+        setShouldConnect(true); // Trigger connection in effect after state update
+        return; 
+      }
+
+      const activeConfig = {
+        server: customConfig.server || import.meta.env.VITE_SIP_SERVER || "",
+        username: customConfig.username || import.meta.env.VITE_SIP_USERNAME || "",
+        password: customConfig.password || import.meta.env.VITE_SIP_PASSWORD || "",
+        realm: customConfig.realm || import.meta.env.VITE_SIP_REALM || "",
+      };
+
+      if (!activeConfig.server || !activeConfig.username || !activeConfig.password) {
+        pushLog("Missing credentials, waiting for manual entry...");
+        return;
+      }
+
       setRegistrationStatus("connecting");
       await serviceRef.current?.connect();
       await serviceRef.current?.register();
       
       // Automatically request microphone permissions after registration
-      // This ensures we can answer incoming calls immediately
       if (!micReady) {
         pushLog("Requesting microphone permission...");
         try {
@@ -128,14 +163,21 @@ export const useSIPUser = (audioRef: React.RefObject<HTMLAudioElement | null>) =
           pushLog("Microphone ready");
         } catch (micError) {
           pushLog(`Microphone access denied: ${(micError as Error).message}`);
-          pushLog("You will be prompted again when answering a call");
         }
       }
     } catch (error) {
       setRegistrationStatus("error");
       pushLog(`Registration error: ${(error as Error).message}`);
     }
-  }, [pushLog, micReady]);
+  }, [pushLog, micReady, customConfig]);
+
+  // Effect to handle connection after config update
+  useEffect(() => {
+    if (shouldConnect && serviceRef.current && registrationStatus === "disconnected") {
+      setShouldConnect(false);
+      connectAndRegister();
+    }
+  }, [shouldConnect, registrationStatus, connectAndRegister]);
 
   const startCall = useCallback(
     async (destination: string) => {
@@ -231,6 +273,7 @@ export const useSIPUser = (audioRef: React.RefObject<HTMLAudioElement | null>) =
     audioLevel,
     localAudioLevel,
     stats,
+    hasEnvConfig,
     reattachAudio: () => serviceRef.current?.reattachAudio() ?? Promise.resolve(),
     listDevices: () => serviceRef.current?.getAudioDevices() ?? Promise.resolve([]),
     testAudio: () => serviceRef.current?.testAudio() ?? Promise.resolve(),

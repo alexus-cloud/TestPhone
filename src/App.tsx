@@ -18,6 +18,16 @@ function App() {
   const audioRef = useRef<HTMLAudioElement>(null);
   const [dialValue, setDialValue] = useState("");
   const [callSeconds, setCallSeconds] = useState(0);
+  const [loginData, setLoginData] = useState(() => {
+    const saved = localStorage.getItem("sip_credentials");
+    const parsed = saved ? JSON.parse(saved) : {};
+    return { 
+      username: parsed.username || import.meta.env.VITE_SIP_USERNAME || "", 
+      password: parsed.password || import.meta.env.VITE_SIP_PASSWORD || "", 
+      server: parsed.server || import.meta.env.VITE_SIP_SERVER || "", 
+      realm: parsed.realm || import.meta.env.VITE_SIP_REALM || "" 
+    };
+  });
 
   const {
     registrationStatus,
@@ -40,6 +50,7 @@ function App() {
     localAudioLevel,
     stats,
     reattachAudio,
+    hasEnvConfig,
   } = useSIPUser(audioRef);
 
   useEffect(() => {
@@ -63,10 +74,12 @@ function App() {
     return undefined;
   }, [callState]);
 
-  // Auto-connect on mount
+  // Auto-connect on mount ONLY if .env config is present
   useEffect(() => {
-    connectAndRegister();
-  }, [connectAndRegister]);
+    if (hasEnvConfig) {
+      connectAndRegister();
+    }
+  }, [connectAndRegister, hasEnvConfig]);
 
   const handleCall = async () => {
     if (!dialValue.trim()) return;
@@ -163,22 +176,73 @@ function App() {
             </div>
           )}
 
-          <Dialpad value={dialValue} onChange={setDialValue} onCall={handleCall} disabled={!micReady} />
-          {incomingCall && callState === "incoming" && (
-            <IncomingCall from={incomingCall.from} onAnswer={answerCall} onDecline={hangupCall} />
+          {registrationStatus === "registered" ? (
+            <>
+              <Dialpad value={dialValue} onChange={setDialValue} onCall={handleCall} disabled={!micReady} />
+              {incomingCall && callState === "incoming" && (
+                <IncomingCall from={incomingCall.from} onAnswer={answerCall} onDecline={hangupCall} />
+              )}
+              <CallControls
+                canAnswer={canAnswer}
+                canHangup={canHangup}
+                canHold={canHold}
+                canMute={canMute}
+                isOnHold={isOnHold}
+                isMuted={isMuted}
+                onAnswer={answerCall}
+                onHangup={hangupCall}
+                onToggleHold={handleHoldToggle}
+                onToggleMute={toggleMute}
+              />
+            </>
+          ) : (
+            <section className="card login-form" style={{ marginTop: "1rem" }}>
+              <h2>SIP Credentials</h2>
+              <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+                <div className="input-group">
+                  <label style={{ fontSize: "0.75rem", opacity: 0.6 }}>Server (WSS)</label>
+                  <input 
+                    type="text" 
+                    placeholder="wss://..." 
+                    value={loginData.server}
+                    onChange={(e) => setLoginData({...loginData, server: e.target.value})}
+                    className="input"
+                    disabled={registrationStatus === "connecting"}
+                  />
+                </div>
+                <div className="input-group">
+                  <label style={{ fontSize: "0.75rem", opacity: 0.6 }}>Username</label>
+                  <input 
+                    type="text" 
+                    placeholder="Username" 
+                    value={loginData.username}
+                    onChange={(e) => setLoginData({...loginData, username: e.target.value})}
+                    className="input"
+                    disabled={registrationStatus === "connecting"}
+                  />
+                </div>
+                <div className="input-group">
+                  <label style={{ fontSize: "0.75rem", opacity: 0.6 }}>Password</label>
+                  <input 
+                    type="password" 
+                    placeholder="Password" 
+                    value={loginData.password}
+                    onChange={(e) => setLoginData({...loginData, password: e.target.value})}
+                    className="input"
+                    disabled={registrationStatus === "connecting"}
+                  />
+                </div>
+                <button 
+                  className="btn primary" 
+                  onClick={() => connectAndRegister(loginData)}
+                  disabled={registrationStatus === "connecting"}
+                >
+                  {registrationStatus === "connecting" ? "Connecting..." : "Connect & Register"}
+                </button>
+              </div>
+            </section>
           )}
-          <CallControls
-            canAnswer={canAnswer}
-            canHangup={canHangup}
-            canHold={canHold}
-            canMute={canMute}
-            isOnHold={isOnHold}
-            isMuted={isMuted}
-            onAnswer={answerCall}
-            onHangup={hangupCall}
-            onToggleHold={handleHoldToggle}
-            onToggleMute={toggleMute}
-          />
+
           <div className="debug-tools" style={{ marginTop: "1rem", display: "flex", gap: "0.5rem" }}>
             <button className="btn secondary" onClick={async () => {
               await testAudio();
@@ -192,23 +256,22 @@ function App() {
         </div>
         <div className="right-column">
           <LogsPanel logs={logs} />
-          <section className="card config">
-            <h2>Config</h2>
-            <ul>
-              <li>
-                <span>Server:</span>
-                <strong>{import.meta.env.VITE_SIP_SERVER}</strong>
-              </li>
-              <li>
-                <span>User:</span>
-                <strong>{import.meta.env.VITE_SIP_USERNAME}</strong>
-              </li>
-              <li>
-                <span>Realm:</span>
-                <strong>{import.meta.env.VITE_SIP_REALM}</strong>
-              </li>
-            </ul>
-          </section>
+          
+          {registrationStatus === "registered" && (
+            <section className="card session-info" style={{ marginBottom: "1rem" }}>
+              <h2>Active Session</h2>
+              <ul style={{ listStyle: "none", padding: 0, margin: 0, fontSize: "0.85rem" }}>
+                <li style={{ display: "flex", justifyContent: "space-between", marginBottom: "5px" }}>
+                  <span style={{ opacity: 0.6 }}>Server:</span>
+                  <strong>{loginData.server}</strong>
+                </li>
+                <li style={{ display: "flex", justifyContent: "space-between" }}>
+                  <span style={{ opacity: 0.6 }}>User:</span>
+                  <strong>{loginData.username}</strong>
+                </li>
+              </ul>
+            </section>
+          )}
 
           {stats && (
             <section className="card stats">
