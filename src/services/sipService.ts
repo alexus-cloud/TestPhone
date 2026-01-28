@@ -475,7 +475,7 @@ export class SipService {
         }
         // Local
         if (this.localAnalyser && localDataArray) {
-          this.localAnalyser.getByteFrequencyData(localDataArray);
+          this.localAnalyser.getByteFrequencyData(localDataArray as any);
           let localSum = 0;
           for (let i = 0; i < localBufferLength; i++) localSum += localDataArray[i];
           this.events.onLocalAudioLevel?.(localSum / localBufferLength);
