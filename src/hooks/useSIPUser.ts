@@ -18,6 +18,8 @@ export const useSIPUser = (audioRef: React.RefObject<HTMLAudioElement | null>) =
     packetsReceived: number; 
     packetsLost: number; 
     jitter: number;
+    roundTripTime: number;
+    audioLevel: number;
     iceCandidatePair?: string;
     dtlsState?: string;
     tlsVersion?: string;
@@ -275,7 +277,14 @@ export const useSIPUser = (audioRef: React.RefObject<HTMLAudioElement | null>) =
     stats,
     hasEnvConfig,
     reattachAudio: () => serviceRef.current?.reattachAudio() ?? Promise.resolve(),
-    listDevices: () => serviceRef.current?.getAudioDevices() ?? Promise.resolve([]),
+    listDevices: async () => {
+      const devices = await serviceRef.current?.getAudioDevices();
+      if (devices) {
+        pushLog(`Audio Devices found (${devices.length}):`);
+        devices.forEach(d => pushLog(`- [${d.kind}] ${d.label || "Unnamed device"}`));
+      }
+      return devices || [];
+    },
     testAudio: () => serviceRef.current?.testAudio() ?? Promise.resolve(),
   };
 };

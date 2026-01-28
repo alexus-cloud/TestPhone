@@ -22,6 +22,8 @@ export interface SipServiceEvents {
     packetsReceived: number; 
     packetsLost: number; 
     jitter: number;
+    roundTripTime: number;
+    audioLevel: number;
     iceCandidatePair?: string;
     dtlsState?: string;
     tlsVersion?: string;
@@ -54,8 +56,19 @@ export class SipService {
     this.id = this.generateId(config.username);
     
     // Initialize ringer
-    this.ringer = new Audio("/ringtone.mp3");
+    this.ringer = new Audio();
     this.ringer.loop = true;
+    
+    // Explicitly set source using Vite's BASE_URL
+    const baseUrl = (import.meta as any).env?.BASE_URL || "/";
+    const ringerSrc = `${baseUrl.endsWith("/") ? baseUrl : baseUrl + "/"}ringtone.mp3`;
+    this.ringer.src = ringerSrc;
+    this.ringer.load();
+    
+    this.ringer.addEventListener("error", (e) => {
+      const error = (e.target as HTMLAudioElement).error;
+      this.log(`Ringer loading error: ${error?.message || "unknown error"} (code: ${error?.code}), source: ${ringerSrc}`);
+    });
   }
 
   private generateId(username: string): string {
@@ -512,12 +525,21 @@ export class SipService {
         let dtlsState = "";
         let tlsVersion = "";
 
+        let roundTripTime = 0;
+        let audioLevel = 0;
+        
         stats.forEach(report => {
           if (report.type === "inbound-rtp" && report.kind === "audio") {
             bytesReceived = report.bytesReceived;
             packetsReceived = report.packetsReceived;
             packetsLost = report.packetsLost;
             jitter = report.jitter;
+            if (report.roundTripTime) {
+              roundTripTime = report.roundTripTime;
+            }
+          }
+          if (report.type === "media-source" && report.kind === "audio") {
+            audioLevel = report.audioLevel || 0;
           }
           if (report.type === "outbound-rtp" && report.kind === "audio") {
             bytesSent = report.bytesSent;
@@ -546,6 +568,8 @@ export class SipService {
           packetsReceived, 
           packetsLost, 
           jitter, 
+          roundTripTime,
+          audioLevel,
           iceCandidatePair, 
           dtlsState,
           tlsVersion 
