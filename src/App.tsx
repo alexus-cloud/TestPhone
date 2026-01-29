@@ -102,11 +102,21 @@ function App() {
   return (
     <div className="app">
       <header>
-        <div>
-          <h1>SIP.js Test Phone</h1>
-          <p>Minimal softphone to validate SIP server compatibility.</p>
+        <div className="header-start">
+          <img 
+            src="https://cdn.prod.website-files.com/68e3d8e3470ae9fccf3ee8a0/68e4d316e6c643add78a645a_Logo.svg" 
+            alt="Ringotel Logo" 
+            className="app-logo"
+            onError={(e) => (e.currentTarget.style.display = 'none')}
+          />
         </div>
-        <div className="actions">
+        
+        <div className="header-center">
+          <h1>Ringotel Test Softphone</h1>
+          <p>Validated SIP server compatibility for Ringotel users.</p>
+        </div>
+
+        <div className="header-end actions">
           {/* Auto-connect enabled - no manual buttons needed */}
         </div>
       </header>
