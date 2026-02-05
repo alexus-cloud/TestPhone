@@ -82,7 +82,12 @@ export class SipService {
   }
 
   private buildOptions(): SimpleUserOptions {
-    const { server, username, password, realm } = this.config;
+    const { server, realm } = this.config;
+    // Use provisioned credentials if available, otherwise fallback to config
+    const username = this.credentials?.username || this.config.username;
+    const authUsername = this.credentials?.authUsername || username;
+    const password = this.credentials?.password || this.config.password;
+    
     const resolvedRealm = realm || this.extractRealm(server);
     this.log(`Using realm: ${resolvedRealm || "(empty)"}`);
 
@@ -93,7 +98,7 @@ export class SipService {
         remote: { audio: this.audioElement },
       },
       userAgentOptions: {
-        authorizationUsername: username,
+        authorizationUsername: authUsername,
         authorizationPassword: password,
         contactName: this.id,
         contactParams: { transport: "wss" },
@@ -126,6 +131,12 @@ export class SipService {
           const from = session?.remoteIdentity?.displayName || session?.remoteIdentity?.uri?.user || "Unknown";
           
           this.log(`Incoming call received from: ${from}`);
+          
+          // Debug PeerConnection state for DTLS handshake monitoring
+          if (session?.sessionDescriptionHandler?.peerConnection) {
+            const pc = session.sessionDescriptionHandler.peerConnection as RTCPeerConnection;
+            this.monitorPeerConnection(pc);
+          }
           
           // Start ringing
           this.ringer.play().catch(e => this.log(`Ringer play failed: ${e.message}`));
@@ -238,8 +249,15 @@ export class SipService {
     };
   }
 
-  async connect(): Promise<void> {
+  async connect(credentials?: { username: string; authUsername: string; password: string }): Promise<void> {
     if (!this.user) {
+      // Logic for using injected credentials or fallback
+      if (credentials) {
+        this.log(`Using injected credentials for ${credentials.username} (auth: ${credentials.authUsername})`);
+        this.id = credentials.authUsername;
+        this.credentials = credentials;
+      }
+      
       this.log(`Creating SimpleUser for ${this.config.server}`);
       this.user = new SimpleUser(this.config.server, this.buildOptions());
     }
@@ -247,6 +265,8 @@ export class SipService {
     await this.user.connect();
     this.log("Connected");
   }
+
+  private credentials?: { username: string; authUsername: string; password: string };
 
 
   async register(): Promise<void> {
@@ -585,6 +605,26 @@ export class SipService {
       window.clearInterval(this.statsInterval);
       this.statsInterval = undefined;
     }
+  }
+
+  private monitorPeerConnection(pc: RTCPeerConnection): void {
+    this.log("--- Monitoring RTCPeerConnection ---");
+    
+    pc.oniceconnectionstatechange = () => {
+      this.log(`ICE Connection State: ${pc.iceConnectionState}`);
+      if (pc.iceConnectionState === 'failed') {
+        this.log("ICE Check Failed! Check STUN/TURN and Firewall.");
+      }
+    };
+    
+    pc.onconnectionstatechange = () => {
+      this.log(`DTLS Connection State: ${pc.connectionState}`);
+      if (pc.connectionState === 'failed') {
+        this.log("DTLS Handshake Failed! Check certificates or MTU.");
+      }
+    };
+    
+    pc.onsignalingstatechange = () => this.log(`Signaling State: ${pc.signalingState}`);
   }
 
   private extractRealm(server: string): string {

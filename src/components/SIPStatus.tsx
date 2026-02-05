@@ -98,16 +98,18 @@ export const SIPStatus = ({
             <input 
               className="compact-input"
               type="text" 
-              placeholder="WSS Server" 
-              value={loginData?.server || ""}
-              onChange={(e) => onLoginDataChange?.({...loginData, server: e.target.value})}
+              placeholder="Domain" 
+              value={loginData?.domain || ""}
+              onChange={(e) => onLoginDataChange?.({...loginData, domain: e.target.value})}
               disabled={status === "connecting"}
+              readOnly={!!loginData?.domain} // Make read-only if we have a domain (e.g. from .env or previous session)
+              style={{ backgroundColor: loginData?.domain ? "#f0f0f0" : "inherit", cursor: loginData?.domain ? "not-allowed" : "text" }}
             />
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px" }}>
               <input 
                 className="compact-input"
                 type="text" 
-                placeholder="User" 
+                placeholder="Login" 
                 value={loginData?.username || ""}
                 onChange={(e) => onLoginDataChange?.({...loginData, username: e.target.value})}
                 disabled={status === "connecting"}
@@ -115,7 +117,7 @@ export const SIPStatus = ({
               <input 
                 className="compact-input"
                 type="password" 
-                placeholder="Pass" 
+                placeholder="Password" 
                 value={loginData?.password || ""}
                 onChange={(e) => onLoginDataChange?.({...loginData, password: e.target.value})}
                 disabled={status === "connecting"}
@@ -124,10 +126,10 @@ export const SIPStatus = ({
             <button 
               className="btn primary small-btn" 
               onClick={onConnect}
-              disabled={status === "connecting" || !loginData?.server || !loginData?.username}
+              disabled={status === "connecting" || !loginData?.domain || !loginData?.username || !loginData?.password}
               style={{ width: "100%", marginTop: "4px" }}
             >
-              {status === "connecting" ? "Connecting..." : "Register"}
+              {status === "connecting" ? "Connecting..." : "Login"}
             </button>
           </div>
         )}

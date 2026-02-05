@@ -22,6 +22,7 @@ function App() {
     const saved = localStorage.getItem("sip_credentials");
     const parsed = saved ? JSON.parse(saved) : {};
     return { 
+      domain: parsed.domain || import.meta.env.VITE_SIP_DOMAIN || "",
       username: parsed.username || import.meta.env.VITE_SIP_USERNAME || "", 
       password: parsed.password || import.meta.env.VITE_SIP_PASSWORD || "", 
       server: parsed.server || import.meta.env.VITE_SIP_SERVER || "", 

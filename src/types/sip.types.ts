@@ -7,6 +7,7 @@ export interface IncomingCallInfo {
 }
 
 export interface SipConfig {
+  domain?: string;
   server: string;
   username: string;
   password: string;

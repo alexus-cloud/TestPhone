@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { SipService } from "../services/sipService";
+import { ProvisioningService } from "../services/provisioningService";
+import { RealtimeService } from "../services/realtimeService";
 import type { CallState, IncomingCallInfo, RegistrationStatus, SipConfig } from "../types/sip.types";
 
 export const useSIPUser = (audioRef: React.RefObject<HTMLAudioElement | null>) => {
@@ -36,16 +38,19 @@ export const useSIPUser = (audioRef: React.RefObject<HTMLAudioElement | null>) =
   
   const [shouldConnect, setShouldConnect] = useState(false);
   const serviceRef = useRef<SipService | null>(null);
+  const realtimeRef = useRef<RealtimeService | null>(null);
+  const isProcessingRef = useRef(false);
 
-  const config: SipConfig = useMemo(
-    () => ({
-      server: customConfig.server || import.meta.env.VITE_SIP_SERVER || "",
+  const config: SipConfig = useMemo(() => {
+    const domain = customConfig.domain || import.meta.env.VITE_SIP_DOMAIN || "";
+    return {
+      domain,
+      server: customConfig.server || (domain ? `wss://${domain}.ringotel.co` : (import.meta.env.VITE_SIP_SERVER || "")),
       username: customConfig.username || import.meta.env.VITE_SIP_USERNAME || "",
       password: customConfig.password || import.meta.env.VITE_SIP_PASSWORD || "",
       realm: customConfig.realm || import.meta.env.VITE_SIP_REALM || "",
-    }),
-    [customConfig],
-  );
+    };
+  }, [customConfig]);
 
   const hasEnvConfig = useMemo(() => {
     return !!(import.meta.env.VITE_SIP_SERVER && import.meta.env.VITE_SIP_USERNAME && import.meta.env.VITE_SIP_PASSWORD);
@@ -72,10 +77,8 @@ export const useSIPUser = (audioRef: React.RefObject<HTMLAudioElement | null>) =
       onRegistered: () => {
         setRegistrationStatus("registered");
         pushLog("SIP registered");
-        // Save to localStorage on success if not using ENV
-        if (!hasEnvConfig) {
-          localStorage.setItem("sip_credentials", JSON.stringify(config));
-        }
+        // Always save manual credentials to localStorage on success
+        localStorage.setItem("sip_credentials", JSON.stringify(customConfig));
       },
       onUnregistered: () => {
         setRegistrationStatus("disconnected");
@@ -117,8 +120,12 @@ export const useSIPUser = (audioRef: React.RefObject<HTMLAudioElement | null>) =
     return () => {
       service.disconnect().catch(() => undefined);
       serviceRef.current = null;
+      if (realtimeRef.current) {
+        realtimeRef.current.disconnect();
+        realtimeRef.current = null;
+      }
     };
-  }, [audioRef, config, pushLog, hasEnvConfig]);
+  }, [audioRef, config, pushLog, hasEnvConfig, customConfig]);
 
   const checkMicPermissions = useCallback(async () => {
     try {
@@ -140,21 +147,56 @@ export const useSIPUser = (audioRef: React.RefObject<HTMLAudioElement | null>) =
         return; 
       }
 
-      const activeConfig = {
-        server: customConfig.server || import.meta.env.VITE_SIP_SERVER || "",
+      const activeDomain = customConfig.domain || import.meta.env.VITE_SIP_DOMAIN || "";
+      const activeConfig: SipConfig = {
+        domain: activeDomain,
+        server: customConfig.server || (activeDomain ? `wss://${activeDomain}.ringotel.co` : (import.meta.env.VITE_SIP_SERVER || "")),
         username: customConfig.username || import.meta.env.VITE_SIP_USERNAME || "",
         password: customConfig.password || import.meta.env.VITE_SIP_PASSWORD || "",
         realm: customConfig.realm || import.meta.env.VITE_SIP_REALM || "",
       };
 
-      if (!activeConfig.server || !activeConfig.username || !activeConfig.password) {
+      if (!activeConfig.domain || !activeConfig.username || !activeConfig.password) {
         pushLog("Missing credentials, waiting for manual entry...");
         return;
       }
 
       setRegistrationStatus("connecting");
-      await serviceRef.current?.connect();
+      
+      // Perform provisioning first
+      let sipCredentials = undefined;
+      try {
+        pushLog(`Starting provisioning for ${activeConfig.username}@${activeConfig.domain}...`);
+        const provisioningService = new ProvisioningService(activeConfig, (msg: string) => pushLog(msg));
+        const { extension, userid, termpass } = await provisioningService.provision();
+        pushLog(`Provisioning successful for extension ${extension}`);
+        
+        // Map provisioning results to SIP registration parameters
+        sipCredentials = { 
+          username: extension, 
+          authUsername: userid, 
+          password: termpass 
+        };
+      } catch (provError) {
+        pushLog(`Provisioning failed: ${(provError as Error).message}`);
+        setRegistrationStatus("error");
+        return;
+      }
+
+      await serviceRef.current?.connect(sipCredentials);
       await serviceRef.current?.register();
+
+      // Connect Realtime channel
+      try {
+        if (realtimeRef.current) realtimeRef.current.disconnect();
+        realtimeRef.current = new RealtimeService(activeConfig.domain!, (msg: string) => pushLog(msg));
+        if (sipCredentials) {
+          realtimeRef.current.setTermid(sipCredentials.authUsername);
+        }
+        realtimeRef.current.connect();
+      } catch (realtimeError) {
+        pushLog(`Realtime connection failed: ${(realtimeError as Error).message}`);
+      }
       
       // Automatically request microphone permissions after registration
       if (!micReady) {
@@ -170,15 +212,22 @@ export const useSIPUser = (audioRef: React.RefObject<HTMLAudioElement | null>) =
     } catch (error) {
       setRegistrationStatus("error");
       pushLog(`Registration error: ${(error as Error).message}`);
+    } finally {
+      isProcessingRef.current = false;
     }
   }, [pushLog, micReady, customConfig]);
 
   // Effect to handle connection after config update
   useEffect(() => {
     if (shouldConnect && serviceRef.current && registrationStatus === "disconnected") {
-      setShouldConnect(false);
-      connectAndRegister();
+      // Use a timeout or next tick to avoid synchronous setState warning
+      const timer = setTimeout(() => {
+        setShouldConnect(false);
+        connectAndRegister();
+      }, 0);
+      return () => clearTimeout(timer);
     }
+    return undefined;
   }, [shouldConnect, registrationStatus, connectAndRegister]);
 
   const startCall = useCallback(
