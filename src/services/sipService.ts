@@ -110,7 +110,7 @@ export class SipService {
         userAgentString: `Ringotel (${this.id}) SIP.js/0.21.2`,
         logLevel: "debug",
         logBuiltinEnabled: true,
-        logConnector: (level, category, label, content) => {
+        logConnector: (_level, _category, _label, content) => {
           if (content.includes("Receiving WebSocket message")) {
             const msg = content.split(/Receiving WebSocket message(?:[:\n]*)/)[1] || content;
             this.events.onLog?.(`\n[↓ IN]: ${msg}\n`);
