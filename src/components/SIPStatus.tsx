@@ -128,7 +128,14 @@ export const SIPStatus = ({
             </div>
           </div>
         ) : (
-          <div style={{ 
+          <form 
+            onSubmit={(e) => {
+              e.preventDefault();
+              if (loginData?.domain && loginData?.username && loginData?.password && status !== "connecting") {
+                onConnect?.();
+              }
+            }}
+            style={{ 
             borderTop: "1px solid #f1f5f9", 
             paddingTop: "12px",
             display: "flex",
@@ -162,14 +169,14 @@ export const SIPStatus = ({
               />
             </div>
             <button 
+              type="submit"
               className="btn primary small-btn" 
-              onClick={onConnect}
               disabled={status === "connecting" || !loginData?.domain || !loginData?.username || !loginData?.password}
               style={{ width: "100%", marginTop: "4px" }}
             >
               {status === "connecting" ? "Connecting..." : "Login"}
             </button>
-          </div>
+          </form>
         )}
       </div>
     </section>

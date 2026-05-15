@@ -34,7 +34,7 @@ export class ProvisioningService {
         try {
             const response = await fetch(url, {
                 method: 'POST',
-                credentials: 'include',
+                credentials: 'omit',
                 headers: {
                     'Authorization': `Basic ${authBase64}`,
                     'Content-Type': 'application/json'
