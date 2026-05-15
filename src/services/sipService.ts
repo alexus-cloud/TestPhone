@@ -46,7 +46,7 @@ export class SipService {
   private id: string;
 
   private log(message: string) {
-    this.events.onLog?.(`[SipService] ${message}`);
+    console.log(`[SipService] ${message}`);
   }
 
   constructor(config: SipConfig, audioElement: HTMLAudioElement, events: SipServiceEvents = {}) {
@@ -110,6 +110,15 @@ export class SipService {
         userAgentString: `Ringotel (${this.id}) SIP.js/0.21.2`,
         logLevel: "debug",
         logBuiltinEnabled: true,
+        logConnector: (level, category, label, content) => {
+          if (content.includes("Receiving WebSocket message")) {
+            const msg = content.split(/Receiving WebSocket message(?:[:\n]*)/)[1] || content;
+            this.events.onLog?.(`\n[↓ IN]: ${msg}\n`);
+          } else if (content.includes("Sending WebSocket message")) {
+            const msg = content.split(/Sending WebSocket message(?:[:\n]*)/)[1] || content;
+            this.events.onLog?.(`\n[↑ OUT]: ${msg}\n`);
+          }
+        },
         sessionDescriptionHandlerFactoryOptions: {
           iceGatheringTimeout: 2000,
           peerConnectionConfiguration: {

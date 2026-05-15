@@ -6,6 +6,7 @@ import { Dialpad } from "./components/Dialpad";
 import { LogsPanel } from "./components/LogsPanel";
 import { AudioPanel } from "./components/AudioPanel";
 import { useSIPUser } from "./hooks/useSIPUser";
+import { getHost } from "./lib/hostHelper";
 import "./App.css";
 
 const formatDuration = (seconds: number) => {
@@ -19,14 +20,13 @@ function App() {
   const [dialValue, setDialValue] = useState("");
   const [callSeconds, setCallSeconds] = useState(0);
   const [loginData, setLoginData] = useState(() => {
-    const saved = localStorage.getItem("sip_credentials");
+    localStorage.removeItem("sip_credentials");
+    const saved = localStorage.getItem("sip_credentials_v2");
     const parsed = saved ? JSON.parse(saved) : {};
     return { 
-      domain: parsed.domain || import.meta.env.VITE_SIP_DOMAIN || "",
-      username: parsed.username || import.meta.env.VITE_SIP_USERNAME || "", 
-      password: parsed.password || import.meta.env.VITE_SIP_PASSWORD || "", 
-      server: parsed.server || import.meta.env.VITE_SIP_SERVER || "", 
-      realm: parsed.realm || import.meta.env.VITE_SIP_REALM || "" 
+      domain: parsed.domain || "",
+      username: parsed.username || "", 
+      password: parsed.password || "" 
     };
   });
 
@@ -37,6 +37,7 @@ function App() {
     isMuted,
     isOnHold,
     logs,
+    realtimeLogs,
     micReady,
     connectAndRegister,
     startCall,
@@ -52,6 +53,7 @@ function App() {
     stats,
     reattachAudio,
     hasEnvConfig,
+    apiConnectionStatus,
   } = useSIPUser(audioRef);
 
   useEffect(() => {
@@ -126,8 +128,9 @@ function App() {
         <div className="left-column">
           <SIPStatus 
             status={registrationStatus} 
+            apiStatus={apiConnectionStatus}
             username={loginData.username} 
-            server={loginData.server} 
+            server={getHost(loginData.domain || "")} 
             loginData={loginData}
             onLoginDataChange={setLoginData}
             onConnect={() => connectAndRegister(loginData)}
@@ -152,6 +155,8 @@ function App() {
           <Dialpad value={dialValue} onChange={setDialValue} onCall={handleCall} disabled={!micReady} />
         </div>
         <div className="right-column">
+          <LogsPanel title="API Messages Log" logs={realtimeLogs} />
+          <LogsPanel title="SIP Messages Log" logs={logs} />
           <AudioPanel 
             localAudioLevel={localAudioLevel}
             audioLevel={audioLevel}
@@ -192,7 +197,6 @@ function App() {
               </div>
             </div>
           </section>
-          <LogsPanel logs={logs} />
         </div>
       </main>
 

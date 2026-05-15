@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { SipService } from "../services/sipService";
 import { ProvisioningService } from "../services/provisioningService";
 import { RealtimeService } from "../services/realtimeService";
+import { getHost } from "../lib/hostHelper";
 import type { CallState, IncomingCallInfo, RegistrationStatus, SipConfig } from "../types/sip.types";
 
 export const useSIPUser = (audioRef: React.RefObject<HTMLAudioElement | null>) => {
@@ -11,6 +12,7 @@ export const useSIPUser = (audioRef: React.RefObject<HTMLAudioElement | null>) =
   const [isMuted, setIsMuted] = useState(false);
   const [isOnHold, setIsOnHold] = useState(false);
   const [logs, setLogs] = useState<string[]>([]);
+  const [realtimeLogs, setRealtimeLogs] = useState<string[]>([]);
   const [micReady, setMicReady] = useState(false);
   const [audioLevel, setAudioLevel] = useState(0);
   const [localAudioLevel, setLocalAudioLevel] = useState(0);
@@ -27,9 +29,12 @@ export const useSIPUser = (audioRef: React.RefObject<HTMLAudioElement | null>) =
     tlsVersion?: string;
   } | null>(null);
 
+  const [apiConnectionStatus, setApiConnectionStatus] = useState<"disconnected" | "connecting" | "connected" | "error">("disconnected");
+
   const [customConfig, setCustomConfig] = useState<Partial<SipConfig>>(() => {
     try {
-      const saved = localStorage.getItem("sip_credentials");
+      localStorage.removeItem("sip_credentials");
+      const saved = localStorage.getItem("sip_credentials_v2");
       return saved ? JSON.parse(saved) : {};
     } catch {
       return {};
@@ -42,23 +47,29 @@ export const useSIPUser = (audioRef: React.RefObject<HTMLAudioElement | null>) =
   const isProcessingRef = useRef(false);
 
   const config: SipConfig = useMemo(() => {
-    const domain = customConfig.domain || import.meta.env.VITE_SIP_DOMAIN || "";
+    const domain = customConfig.domain || "";
+    const host = getHost(domain);
     return {
       domain,
-      server: customConfig.server || (domain ? `wss://${domain}.ringotel.co` : (import.meta.env.VITE_SIP_SERVER || "")),
-      username: customConfig.username || import.meta.env.VITE_SIP_USERNAME || "",
-      password: customConfig.password || import.meta.env.VITE_SIP_PASSWORD || "",
-      realm: customConfig.realm || import.meta.env.VITE_SIP_REALM || "",
+      server: customConfig.server || (domain ? `wss://${host}` : ""),
+      username: customConfig.username || "",
+      password: customConfig.password || "",
+      realm: customConfig.realm || host,
     };
   }, [customConfig]);
 
   const hasEnvConfig = useMemo(() => {
-    return !!(import.meta.env.VITE_SIP_SERVER && import.meta.env.VITE_SIP_USERNAME && import.meta.env.VITE_SIP_PASSWORD);
+    return false;
   }, []);
 
   const pushLog = useCallback((message: string) => {
     setLogs((prev) => [...prev.slice(-199), message]);
-    console.log(message);
+    console.log(`[SIP] ${message}`);
+  }, []);
+
+  const pushRealtimeLog = useCallback((message: string) => {
+    setRealtimeLogs((prev) => [...prev.slice(-199), message]);
+    console.log(`[API] ${message}`);
   }, []);
 
   useEffect(() => {
@@ -78,7 +89,7 @@ export const useSIPUser = (audioRef: React.RefObject<HTMLAudioElement | null>) =
         setRegistrationStatus("registered");
         pushLog("SIP registered");
         // Always save manual credentials to localStorage on success
-        localStorage.setItem("sip_credentials", JSON.stringify(customConfig));
+        localStorage.setItem("sip_credentials_v2", JSON.stringify(customConfig));
       },
       onUnregistered: () => {
         setRegistrationStatus("disconnected");
@@ -147,13 +158,14 @@ export const useSIPUser = (audioRef: React.RefObject<HTMLAudioElement | null>) =
         return; 
       }
 
-      const activeDomain = customConfig.domain || import.meta.env.VITE_SIP_DOMAIN || "";
+      const activeDomain = customConfig.domain || "";
+      const host = getHost(activeDomain);
       const activeConfig: SipConfig = {
         domain: activeDomain,
-        server: customConfig.server || (activeDomain ? `wss://${activeDomain}.ringotel.co` : (import.meta.env.VITE_SIP_SERVER || "")),
-        username: customConfig.username || import.meta.env.VITE_SIP_USERNAME || "",
-        password: customConfig.password || import.meta.env.VITE_SIP_PASSWORD || "",
-        realm: customConfig.realm || import.meta.env.VITE_SIP_REALM || "",
+        server: customConfig.server || (activeDomain ? `wss://${host}` : ""),
+        username: customConfig.username || "",
+        password: customConfig.password || "",
+        realm: customConfig.realm || host,
       };
 
       if (!activeConfig.domain || !activeConfig.username || !activeConfig.password) {
@@ -189,7 +201,11 @@ export const useSIPUser = (audioRef: React.RefObject<HTMLAudioElement | null>) =
       // Connect Realtime channel
       try {
         if (realtimeRef.current) realtimeRef.current.disconnect();
-        realtimeRef.current = new RealtimeService(activeConfig.domain!, (msg: string) => pushLog(msg));
+        realtimeRef.current = new RealtimeService(
+          activeConfig.domain!, 
+          (msg: string) => pushRealtimeLog(msg),
+          (status) => setApiConnectionStatus(status)
+        );
         if (sipCredentials) {
           realtimeRef.current.setTermid(sipCredentials.authUsername);
         }
@@ -312,6 +328,7 @@ export const useSIPUser = (audioRef: React.RefObject<HTMLAudioElement | null>) =
     isMuted,
     isOnHold,
     logs,
+    realtimeLogs,
     micReady,
     checkMicPermissions,
     connectAndRegister,
@@ -325,6 +342,7 @@ export const useSIPUser = (audioRef: React.RefObject<HTMLAudioElement | null>) =
     localAudioLevel,
     stats,
     hasEnvConfig,
+    apiConnectionStatus,
     reattachAudio: () => serviceRef.current?.reattachAudio() ?? Promise.resolve(),
     listDevices: async () => {
       const devices = await serviceRef.current?.getAudioDevices();

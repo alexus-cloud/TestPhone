@@ -1,15 +1,29 @@
 
 export class RealtimeService {
   private ws: WebSocket | null = null;
-  private log: (message: string) => void;
   private domain: string;
   private termid: string | null = null;
   private reconnectTimeout: number | null = null;
   private pingInterval: number | null = null;
 
-  constructor(domain: string, logger: (message: string) => void = console.log) {
+  private uiLog: (message: string) => void;
+  private onStatusChange?: (status: "disconnected" | "connecting" | "connected" | "error") => void;
+
+  constructor(domain: string, logger: (message: string) => void = console.log, onStatusChange?: (status: "disconnected" | "connecting" | "connected" | "error") => void) {
     this.domain = domain;
-    this.log = (msg) => logger(`[RealtimeService] ${msg}`);
+    this.uiLog = logger;
+    this.onStatusChange = onStatusChange;
+  }
+
+  private log(msg: string) {
+    console.log(`[RealtimeService] ${msg}`);
+  }
+
+  private updateStatus(status: "disconnected" | "connecting" | "connected" | "error") {
+    if (this.onStatusChange) {
+      this.onStatusChange(status);
+    }
+    this.uiLog(`[SYSTEM] API Status: ${status}`);
   }
 
   public setTermid(termid: string) {
@@ -27,12 +41,15 @@ export class RealtimeService {
       : `wss://${this.domain}.ringotel.co`;
       
     this.log(`Connecting to ${url}...`);
+    this.uiLog(`[SYSTEM] Connecting to ${url}...`);
+    this.updateStatus("connecting");
 
     try {
       this.ws = new WebSocket(url, 'json.api.smile-soft.com');
 
       this.ws.onopen = () => {
         this.log("Connected");
+        this.updateStatus("connected");
         this.startHeartbeat();
         if (this.termid) {
           const testMsg = {
@@ -47,17 +64,21 @@ export class RealtimeService {
       };
 
       this.ws.onmessage = (event) => {
-        this.log(`Message received: ${event.data}`);
+        this.uiLog(`\n[↓ IN]: ${event.data}\n`);
         // Handle realtime events here if needed
       };
 
       this.ws.onerror = (error) => {
         this.log(`WebSocket error event triggered. Check network tab for details.`);
         console.error("[RealtimeService] WebSocket error:", error);
+        this.uiLog(`[SYSTEM] WebSocket Error. Check browser console/network tab.`);
+        this.updateStatus("error");
       };
 
       this.ws.onclose = (event) => {
         this.log(`Disconnected: ${event.code} ${event.reason || "(no reason provided)"}`);
+        this.uiLog(`[SYSTEM] Disconnected (Code: ${event.code}, Reason: ${event.reason || "None"})`);
+        this.updateStatus("disconnected");
         this.stopHeartbeat();
         if (event.code !== 1000) {
           this.scheduleReconnect();
@@ -65,6 +86,8 @@ export class RealtimeService {
       };
     } catch (e) {
       this.log(`Connection failed: ${(e as Error).message}`);
+      this.uiLog(`[SYSTEM] Connection exception: ${(e as Error).message}`);
+      this.updateStatus("error");
       this.scheduleReconnect();
     }
   }
@@ -80,12 +103,15 @@ export class RealtimeService {
       this.ws.close();
       this.ws = null;
       this.log("Disconnected manually");
+      this.updateStatus("disconnected");
     }
   }
 
   public send(data: Record<string, unknown>) {
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-      this.ws.send(JSON.stringify(data));
+      const payload = JSON.stringify(data);
+      this.uiLog(`\n[↑ OUT]: ${payload}\n`);
+      this.ws.send(payload);
     } else {
       this.log("Cannot send message: WebSocket is not open");
     }

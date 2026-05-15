@@ -480,6 +480,8 @@ button.ghost {
   font-family: "SFMono-Regular", ui-monospace, monospace;
   font-size: 0.85rem;
   min-height: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 @media (max-width: 960px), (max-height: 850px) {
