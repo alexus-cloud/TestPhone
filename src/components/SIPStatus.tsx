@@ -143,6 +143,9 @@ export const SIPStatus = ({
             gap: "8px"
           }}>
             <input 
+              id="sip-domain"
+              name="domain"
+              autoComplete="organization"
               className="compact-input"
               type="text" 
               placeholder="Domain" 
@@ -152,6 +155,9 @@ export const SIPStatus = ({
             />
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px" }}>
               <input 
+                id="sip-username"
+                name="username"
+                autoComplete="username"
                 className="compact-input"
                 type="text" 
                 placeholder="Extension" 
@@ -160,6 +166,9 @@ export const SIPStatus = ({
                 disabled={status === "connecting"}
               />
               <input 
+                id="sip-password"
+                name="password"
+                autoComplete="current-password"
                 className="compact-input"
                 type="password" 
                 placeholder="Password" 
